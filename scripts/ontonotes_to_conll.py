@@ -1,66 +1,50 @@
-import sys
-import json
-import unicodedata
-from datasets import load_dataset, ClassLabel
+import os
+import argparse
+
+from datasets import load_dataset, ClassLabel, Dataset
 
 ontonotes_label = ClassLabel(num_classes=37, names=["O", "B-PERSON", "I-PERSON", "B-NORP", "I-NORP", "B-FAC", "I-FAC", "B-ORG", "I-ORG", "B-GPE", "I-GPE", "B-LOC", "I-LOC", "B-PRODUCT", "I-PRODUCT", "B-DATE", "I-DATE", "B-TIME", "I-TIME", "B-PERCENT", "I-PERCENT", "B-MONEY", "I-MONEY", "B-QUANTITY", "I-QUANTITY", "B-ORDINAL", "I-ORDINAL", "B-CARDINAL", "I-CARDINAL", "B-EVENT", "I-EVENT", "B-WORK_OF_ART", "I-WORK_OF_ART", "B-LAW", "I-LAW", "B-LANGUAGE", "I-LANGUAGE",])
 
-def get_entities(word_indices, tags):
+def convert(split: Dataset) -> str:
+    """Convert the given OntoNotes split to a string
 
-    entities = []
-    tag_names = [ontonotes_label.int2str(i) for i in tags]
+    Args:
+        split (Dataset): The OntoNotes split
 
-    current_type, current_words = "O", []
+    Returns:
+        str: The string to write to the file
+    """
 
-    for i, tag in enumerate(tag_names):
-
-        if current_type != 'O' and (tag == 'O' or tag.startswith('B')):
-            entities.append({"start": word_indices[current_words[0]][0], "end": word_indices[current_words[-1]][1], "label": current_type[2:]})
-            current_words = []
-            current_type = tag
-
-        if tag.startswith('B'):
-            current_type = tag
-            current_words = []
-
-        current_words.append(i)
-
-    return entities
-
-
-
-def sentence_to_jsonl(words: list, tags: list) -> dict:
-    words[-1].replace('/', '')
-    text = ' '.join(words).replace('-LRB-', '(').replace('-RRB-', ')').replace('-LSB-', '[').replace('-RSB-', ']').replace('-RCB-', '}').replace('-LCB-', '{')
-    if text.startswith("For instance , because the first character"):
-        print(words)
-        print(tags)
-        print([unicodedata.normalize("NFKC", token) for token in words])
-    word_indices = list(zip([0] + [i + 1 for i, ch in enumerate(text) if ch == " "], [i for i, ch in enumerate(text) if ch == " "] + [len(text)]))
-    data = {"word_positions": word_indices, "entities": get_entities(word_indices, tags), "text": text}
-    return data
-
-
-def doc_to_jsonl(document: list, id_: str):
-    data = []
-    for i, sentence in enumerate(document):
-        data.append({**sentence_to_jsonl(sentence["words"], sentence["named_entities"]), "id": f"{id_}-{i}"})
-
-    return data
-
-
-
-def convert(split: str):
-    ontonotes = load_dataset("ontonotes/conll2012_ontonotesv5", "english_v12", trust_remote_code=True, split=split)
-    results = []
-    num_documents = len(ontonotes["sentences"])
-    for i, sentences in enumerate(ontonotes["sentences"]):
+    data = ""
+    num_documents = len(split["sentences"])
+    for i, examples in enumerate(split["sentences"]):
         print(f"Converting document {i} / {num_documents}", end='\r')
-        results.append({"id": ontonotes["document_id"][i], "examples": doc_to_jsonl(sentences, ontonotes["document_id"][i])})
+        data += "-DOCSTART- O\n\n"
+        for example in examples:
+            for word, tag in zip(example["words"], example["named_entities"]):
+                data += f"{word} {ontonotes_label.int2str(tag)}\n"
+            data += "\n"
+    return data
 
-    with open(f"ontonotes.{split}.jsonl", "w+", encoding='utf-8') as f:
-        for document in results:
-            f.write(f"{json.dumps(document, ensure_ascii=False)}\n")
+def save_ontonotes(directory: str) -> None:
+    """Save the OntoNotes dataset to CoNLL-2003 format text files
+
+    Args:
+        directory (str): The directory to save the OntoNotes files to
+    """
+    ontonotes = load_dataset("ontonotes/conll2012_ontonotesv5", "english_v12", trust_remote_code=True)
+
+    for split in ontonotes:
+        with open(os.path.join(directory, f"{split}.txt"), "w+", encoding='utf-8') as f:
+            f.write(convert(ontonotes[split]))
 
 if __name__ == "__main__":
-    convert(sys.argv[1])
+    parser = argparse.ArgumentParser(description='Converts the OntoNotes 5.0 NER dataset to CoNLL format')
+    parser.add_argument('output', help="The output directory")
+    args = parser.parse_args()
+
+    if not os.path.isdir(args.output):
+        os.mkdir(args.output)
+
+    save_ontonotes(args.output)
+
